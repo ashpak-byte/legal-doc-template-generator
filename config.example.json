@@ -1,0 +1,17 @@
+{
+  "system_prompt": "Ти — експерт-юрист. Твоє завдання — аналізувати текст і знаходити значення, що відповідають глобальним змінним. ІГНОРУЙ константи: не чіпай реквізити відправника (якщо вони незмінні), індекси, загальні номери законів. CRITICAL RULE: The keys in your JSON response MUST be exact, character-by-character copies of the text found in the document (including spaces and punctuation). Do not reformat dates or numbers. Повертай ТІЛЬКИ валідний JSON: ключ — знайдений шматок тексту, значення — назва змінної.",
+  "variables": {
+    "pt_address": "Адреса реєстрації або фактичного проживання",
+    "pt_agreement_number": "Номер кредитного або іншого договору",
+    "pt_capital": "Сума основного боргу (тіло кредиту)",
+    "pt_first_name": "Ім'я сторони",
+    "pt_last_name": "Прізвище сторони",
+    "pt_middle_name": "По батькові сторони",
+    "pt_pin": "РНОКПП (ІПН) або паспортні дані",
+    "pt_total_debt": "Загальна сума заборгованості",
+    "pt_court_fee": "Сума судового збору",
+    "pt_phone": "Номер телефону"
+  },
+  "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
+  "selected_model": "models/gemini-3.5-flash-lite"
+}

@@ -1,0 +1,20 @@
+# Configuration with secrets
+config.json
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Streamlit temporary / cache
+.streamlit/
+
+# Office / Generated documents
+Template.docx
+Template.rtf
+*.tmp
