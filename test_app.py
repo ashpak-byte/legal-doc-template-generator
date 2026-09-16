@@ -82,14 +82,38 @@ class TestLegalTemplateGeneratorOllama(unittest.TestCase):
         self.assertEqual(reloaded.paragraphs[0].text, "Тестовий документ")
 
     def test_json_cleaning(self):
+        # 1. Clean markdown code fence with ```json
         raw_response = "```json\n{\n  \"4820-2024\": \"pt_agreement_number\"\n}\n```"
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```"):
-            import re
-            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-            cleaned = re.sub(r"\s*```$", "", cleaned)
-        data = json.loads(cleaned)
+        text = raw_response.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        data = json.loads(text)
         self.assertEqual(data.get("4820-2024"), "pt_agreement_number")
+
+        # 2. Markdown code fence with plain ```
+        plain_fence = "```\n{\n  \"52300\": \"pt_total_debt\"\n}\n```"
+        text2 = plain_fence.strip()
+        if text2.startswith("```json"):
+            text2 = text2[7:]
+        elif text2.startswith("```"):
+            text2 = text2[3:]
+        if text2.endswith("```"):
+            text2 = text2[:-3]
+        text2 = text2.strip()
+        data2 = json.loads(text2)
+        self.assertEqual(data2.get("52300"), "pt_total_debt")
+
+        # 3. Empty string check
+        empty_text = "   "
+        self.assertEqual(len(empty_text.strip()), 0)
+
+    def test_strict_json_directive_in_config(self):
+        self.assertIn("CRITICAL: You must return ONLY raw, valid JSON", self.config["system_prompt"])
 
     def test_fetch_available_models_graceful_on_unreachable_endpoint(self):
         # Must return empty list gracefully and not raise uncaught exception

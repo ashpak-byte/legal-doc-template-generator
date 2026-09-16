@@ -28,7 +28,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "CRITICAL RULE: The keys in your JSON response MUST be exact, "
     "character-by-character copies of the text found in the document "
     "(including spaces and punctuation). Do not reformat dates or numbers. "
-    "Повертай ТІЛЬКИ валідний JSON: ключ — знайдений шматок тексту, значення — назва змінної."
+    "Повертай ТІЛЬКИ валідний JSON: ключ — знайдений шматок тексту, значення — назва змінної. "
+    "CRITICAL: You must return ONLY raw, valid JSON. Do not include any markdown formatting, "
+    "do not use ```json blocks, and do not add any explanations, greetings, or conversational text "
+    "before or after the JSON. Just the raw JSON object."
 )
 
 DEFAULT_VARIABLES = {
@@ -80,6 +83,10 @@ def load_config() -> Dict[str, Any]:
                 data = copy.deepcopy(DEFAULT_CONFIG)
             if "system_prompt" not in data:
                 data["system_prompt"] = DEFAULT_SYSTEM_PROMPT
+            else:
+                directive = "CRITICAL: You must return ONLY raw, valid JSON. Do not include any markdown formatting, do not use ```json blocks, and do not add any explanations, greetings, or conversational text before or after the JSON. Just the raw JSON object."
+                if directive not in data["system_prompt"]:
+                    data["system_prompt"] = data["system_prompt"].strip() + " " + directive
             if "variables" not in data or not isinstance(data["variables"], dict):
                 data["variables"] = DEFAULT_VARIABLES
             if "base_url" not in data:
@@ -270,6 +277,14 @@ def query_local_llm_for_variables(
         timeout=120.0
     )
 
+    directive = (
+        "CRITICAL: You must return ONLY raw, valid JSON. Do not include any markdown formatting, "
+        "do not use ```json blocks, and do not add any explanations, greetings, or conversational text "
+        "before or after the JSON. Just the raw JSON object."
+    )
+    if directive not in system_prompt:
+        system_prompt = system_prompt.strip() + " " + directive
+
     variables_json_str = json.dumps(variables_dict, ensure_ascii=False, indent=2)
     full_system_prompt = (
         f"{system_prompt}\n\n"
@@ -286,21 +301,29 @@ def query_local_llm_for_variables(
     response = client.chat.completions.create(
         model=model_name.strip(),
         messages=messages,
-        response_format={"type": "json_object"},
         temperature=0.1,
     )
 
-    response_text = response.choices[0].message.content or ""
-    response_text = response_text.strip()
+    raw_text = response.choices[0].message.content or ""
+    text = raw_text.strip()
 
-    if response_text.startswith("```"):
-        response_text = re.sub(r"^```(?:json)?\s*", "", response_text)
-        response_text = re.sub(r"\s*```$", "", response_text)
+    if not text:
+        raise ValueError("The LLM returned an empty response.")
+
+    # Strip markdown block formatting if present
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+
+    text = text.strip()
 
     try:
-        parsed_json = json.loads(response_text)
+        parsed_json = json.loads(text)
     except json.JSONDecodeError as err:
-        raise ValueError(f"Не вдалося розпарсити відповідь LLM як JSON: {err}\nОтримана відповідь:\n{response_text}")
+        raise ValueError(f"Не вдалося розпарсити відповідь LLM як JSON: {err}\nОтримана відповідь:\n{raw_text}")
 
     if not isinstance(parsed_json, dict):
         raise ValueError("Очікувався JSON-об'єкт (dict) формату {'текст': 'назва_змінної'}, але отримано інший тип.")
