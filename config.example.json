@@ -12,6 +12,6 @@
     "pt_court_fee": "Сума судового збору",
     "pt_phone": "Номер телефону"
   },
-  "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
-  "selected_model": "models/gemini-3.5-flash-lite"
+  "base_url": "http://brain.primocollect.ua/v1",
+  "selected_model": "qwen3.8:27b"
 }

@@ -1,20 +1,21 @@
-# ⚖️ Legal Document Template Generator (DOCX + Gemini)
+# ⚖️ Legal Document Template Generator (DOCX + Local LLM / Ollama)
 
-A secure, production-grade Python web application built with **Streamlit**, **python-docx**, and **Google Gemini** for automatically analyzing legal contracts in `.docx` format and generating reusable document templates with highlighted variable placeholders (e.g. `$$$pt_agreement_number$$$`).
+A secure, production-grade Python web application built with **Streamlit**, **python-docx**, and an **OpenAI-compatible Local LLM endpoint (Ollama)** for automatically analyzing legal contracts in `.docx` format and generating reusable document templates with highlighted variable placeholders (e.g. `$$$pt_agreement_number$$$`).
 
 ---
 
-## 🌟 Key Architecture & Upgrades
+## 🌟 Architecture & Key Features
 
 | Feature | Description |
 |---|---|
-| **Full DOCX Architecture** | Complete migration from RTF to DOCX. Uses `python-docx` for reliable handling of paragraphs, tables, runs, and formatting. |
-| **Dynamic Model Selection** | Uses `google.generativeai.list_models()` to dynamically discover all available models that support `generateContent`. Zero hardcoded deprecated model names. |
-| **User Model Choice** | Interactive `st.selectbox` in Settings allows choosing the active model (e.g. `models/gemini-3.5-flash-lite`), saved to `config.json` as `selected_model`. |
-| **Exact Character Matching** | System prompt enforces exact character-by-character snippet copying without date or number reformatting. |
-| **Paragraph & Table Run Replacement** | Robust run-splitting engine that preserves styling, clears fragmented runs, and specifically applies **yellow highlighting** (`WD_COLOR_INDEX.YELLOW`) to variable tags. |
-| **In-Memory Streaming** | DOCX template is rendered directly into an `io.BytesIO()` memory buffer for one-click downloading. |
-| **Security & Privacy** | `config.json` is excluded via `.gitignore` to keep API keys private. A `config.example.json` template is provided. |
+| **Local LLM / Ollama Integration** | Migrated from cloud Google Gemini to a self-hosted corporate Local LLM (Ollama) with OpenAI-compatible API (`http://brain.primocollect.ua/v1`). |
+| **No External API Keys Required** | The internal corporate endpoint operates securely on the intranet without cloud tokens. Dummy auth (`api_key='ollama'`) is handled automatically. |
+| **Dynamic Model Discovery** | Automatically fetches available models from the Ollama server using `client.models.list()`. Resilient to offline/remote environments with manual fallback. |
+| **Strict JSON Response Format** | Calls `client.chat.completions.create` with `response_format={"type": "json_object"}` to enforce guaranteed structured JSON parsing. |
+| **Full DOCX Architecture** | Built on `python-docx` for reliable handling of paragraphs, tables, runs, and document structure. |
+| **Run-Spanning Replacement & Highlighting** | Resolves Word run-fragmentation issues at the paragraph/cell level and applies **yellow highlighting** (`WD_COLOR_INDEX.YELLOW`) to newly inserted `$$$variable_name$$$` tags. |
+| **In-Memory Streaming** | Template is compiled directly into an `io.BytesIO()` memory buffer for one-click download of `Template.docx`. |
+| **Human-in-the-Loop Review** | Interactive `st.data_editor` with `SelectboxColumn` for reviewing, editing, and reassigning extracted variables. |
 
 ---
 
@@ -28,10 +29,15 @@ pip install -r requirements.txt
 
 ### 2. Configure Settings
 
-Create `config.json` from the example (or let the app auto-create it):
+Create or check `config.json` (an example template is provided in `config.example.json`):
 
-```bash
-cp config.example.json config.json
+```json
+{
+  "system_prompt": "...",
+  "variables": { ... },
+  "base_url": "http://brain.primocollect.ua/v1",
+  "selected_model": "qwen3.8:27b"
+}
 ```
 
 ### 3. Run the Application
@@ -40,28 +46,28 @@ cp config.example.json config.json
 streamlit run app.py
 ```
 
-The application will open in your browser at `http://localhost:8501`.
+Open `http://localhost:8501` in your browser.
 
 ---
 
-## 📋 Workflow
+## 📋 Usage Workflow
 
 1. **⚙️ Settings Tab**:
-   - Enter your **Gemini API Key**.
-   - Select your preferred model from the dynamically populated **Робоча модель Gemini** dropdown (e.g., `models/gemini-3.5-flash-lite`).
-   - Adjust the **System Prompt** or **Variables Dictionary** if desired, and click **Save Settings**.
+   - Check the **Local API Base URL** (defaults to `http://brain.primocollect.ua/v1` or `http://10.0.1.17/v1`).
+   - Select your model from the dynamically populated list (or type the model name, e.g. `qwen3.8:27b`).
+   - Customize the **System Prompt** or **Variables Dictionary** if needed, and click **Save Settings**.
 2. **📄 Generation Tab**:
-   - Upload your legal document (`.docx`).
-   - Click **🤖 Аналізувати документ за допомогою Gemini**.
-   - Review extracted variables in the **Human-in-the-Loop** editor: toggle `Keep`, adjust snippet text, or change assigned variables via the dropdown.
+   - Upload your contract or legal document (`.docx`).
+   - Click **🤖 Аналізувати документ за допомогою Local LLM**.
+   - Review and fine-tune variables in the **Human-in-the-Loop** table.
    - Click **🚀 Generate Template**.
-   - Click **📥 Завантажити Template.docx** to download your template with highlighted variables.
+   - Click **📥 Завантажити Template.docx** to download the finalized template with yellow-highlighted placeholders.
 
 ---
 
 ## 🧪 Testing & Quality Control (QC)
 
-- **Unit Tests**:
+- **Unit Tests** (no live server needed):
   ```bash
   python test_app.py
   ```
@@ -69,7 +75,7 @@ The application will open in your browser at `http://localhost:8501`.
   ```bash
   python verify_pipeline.py
   ```
-- **Full Quality Control (QC) Stage**:
+- **Full Quality Control Stage**:
   ```bash
   python qc_stage.py
   ```

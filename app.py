@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import docx
 from docx import Document
 from docx.enum.text import WD_COLOR_INDEX
-import google.generativeai as genai
+from openai import OpenAI
 import pandas as pd
 import streamlit as st
 
@@ -17,6 +17,9 @@ import streamlit as st
 # CONFIGURATION & CONSTANTS
 # ==========================================
 CONFIG_FILE = Path(__file__).parent / "config.json"
+
+DEFAULT_BASE_URL = "http://brain.primocollect.ua/v1"
+DEFAULT_SELECTED_MODEL = "qwen3.8:27b"
 
 DEFAULT_SYSTEM_PROMPT = (
     "Ти — експерт-юрист. Твоє завдання — аналізувати текст і знаходити значення, "
@@ -44,8 +47,8 @@ DEFAULT_VARIABLES = {
 DEFAULT_CONFIG = {
     "system_prompt": DEFAULT_SYSTEM_PROMPT,
     "variables": DEFAULT_VARIABLES,
-    "gemini_api_key": "",
-    "selected_model": "models/gemini-3.5-flash-lite"
+    "base_url": DEFAULT_BASE_URL,
+    "selected_model": DEFAULT_SELECTED_MODEL
 }
 
 
@@ -79,10 +82,10 @@ def load_config() -> Dict[str, Any]:
                 data["system_prompt"] = DEFAULT_SYSTEM_PROMPT
             if "variables" not in data or not isinstance(data["variables"], dict):
                 data["variables"] = DEFAULT_VARIABLES
-            if "gemini_api_key" not in data:
-                data["gemini_api_key"] = ""
+            if "base_url" not in data:
+                data["base_url"] = DEFAULT_BASE_URL
             if "selected_model" not in data:
-                data["selected_model"] = data.get("model_name", "models/gemini-3.5-flash-lite")
+                data["selected_model"] = DEFAULT_SELECTED_MODEL
             return data
     except Exception as e:
         print(f"Помилка завантаження config.json: {e}")
@@ -101,28 +104,27 @@ def save_config(config_dict: Dict[str, Any]) -> bool:
 
 
 # ==========================================
-# DYNAMIC MODEL SERVICE
+# DYNAMIC MODEL SERVICE (LOCAL OLLAMA / OPENAI)
 # ==========================================
-def fetch_available_models(api_key: str) -> List[str]:
+def fetch_available_models(base_url: str) -> List[str]:
     """
-    Dynamically fetches all available models supporting generateContent from Gemini API.
-    Does not hardcode any model names.
+    Dynamically fetches all available models from the Local LLM (Ollama)
+    OpenAI-compatible endpoint using client.models.list().
+    Handles ConnectionError, non-JSON responses, and other Exceptions gracefully without crashing.
     """
-    if not api_key.strip():
+    if not base_url or not base_url.strip():
         return []
     try:
-        genai.configure(api_key=api_key.strip())
-        supported = []
-        for m in genai.list_models():
-            methods = getattr(m, "supported_generation_methods", [])
-            if "generateContent" in methods:
-                # Exclude specialized non-text models (TTS, image, clip, etc.)
-                clean_name = m.name
-                if not any(skip in clean_name.lower() for skip in ["tts", "image", "clip", "robotics"]):
-                    supported.append(clean_name)
-        return supported
-    except Exception as e:
-        print(f"Помилка отримання моделей: {e}")
+        client = OpenAI(
+            base_url=base_url.strip(),
+            api_key="ollama",
+            timeout=5.0
+        )
+        models_page = client.models.list()
+        model_ids = [m.id for m in models_page if hasattr(m, "id")]
+        return model_ids
+    except Exception:
+        # Expected when accessed from outside the corporate Intranet or when server is unavailable
         return []
 
 
@@ -175,7 +177,6 @@ def replace_in_paragraph(p, replacements: List[Tuple[str, str]]) -> int:
             match_count += 1
 
     if new_text != original_text:
-        # Preserve font formatting from first run if available
         font_name = None
         font_size = None
         is_bold = None
@@ -190,11 +191,9 @@ def replace_in_paragraph(p, replacements: List[Tuple[str, str]]) -> int:
             if ref.font.color and ref.font.color.rgb:
                 color_rgb = ref.font.color.rgb
 
-        # Cleanly remove all existing runs
         for r in list(p.runs):
             p._p.remove(r._r)
 
-        # Split text by variable placeholders
         tokens = re.split(r"(\$\$\$[a-zA-Z0-9_]+\$\$\$)", new_text)
         for token in tokens:
             if not token:
@@ -211,7 +210,6 @@ def replace_in_paragraph(p, replacements: List[Tuple[str, str]]) -> int:
             if color_rgb is not None:
                 run.font.color.rgb = color_rgb
 
-            # Apply yellow highlight to variable tag
             if re.match(r"^\$\$\$[a-zA-Z0-9_]+\$\$\$$", token):
                 run.font.highlight_color = WD_COLOR_INDEX.YELLOW
 
@@ -246,46 +244,54 @@ def generate_template_docx(doc: Document, replacements: List[Tuple[str, str]]) -
 
 
 # ==========================================
-# GEMINI API INTEGRATION
+# LOCAL LLM (OLLAMA / OPENAI) INTEGRATION
 # ==========================================
-def query_gemini_for_variables(
-    api_key: str,
+def query_local_llm_for_variables(
+    base_url: str,
     model_name: str,
     system_prompt: str,
     variables_dict: Dict[str, str],
     document_text: str,
 ) -> Dict[str, str]:
     """
-    Invokes Gemini API using dynamically selected model to extract document variables.
-    Returns: {"Exact text snippet": "variable_name"}
+    Invokes Local LLM (Ollama) using the OpenAI SDK client.
+    Enforces strict JSON output with response_format={"type": "json_object"}.
+    Returns: {"Exact text snippet in doc": "variable_name"}
     """
-    if not api_key.strip():
-        raise ValueError("Gemini API Key не вказано. Будь ласка, введіть його у вкладці 'Налаштування'.")
+    if not base_url.strip():
+        raise ValueError("Local API Base URL не вказано. Будь ласка, введіть його у вкладці 'Налаштування'.")
 
     if not model_name.strip():
-        raise ValueError("Модель не обрано. Будь ласка, виберіть модель у вкладці 'Налаштування'.")
+        raise ValueError("Модель не обрано. Будь ласка, виберіть або введіть модель у вкладці 'Налаштування'.")
 
-    genai.configure(api_key=api_key.strip())
+    client = OpenAI(
+        base_url=base_url.strip(),
+        api_key="ollama",
+        timeout=120.0
+    )
 
     variables_json_str = json.dumps(variables_dict, ensure_ascii=False, indent=2)
-    user_instructions = (
+    full_system_prompt = (
         f"{system_prompt}\n\n"
         f"ГЛОБАЛЬНІ ЗМІННІ (словник):\n{variables_json_str}\n\n"
-        f"ТЕКСТ ДОКУМЕНТА ДЛЯ АНАЛІЗУ:\n\"\"\"\n{document_text}\n\"\"\"\n\n"
         "ВАЖЛИВО: Повертай ТІЛЬКИ валідний JSON-об'єкт, де кожен ключ — це точний фрагмент тексту з документа, "
         "а значення — назва змінної з доступного словника. Без будь-яких додаткових коментарів чи тексту навколо JSON."
     )
 
-    model = genai.GenerativeModel(
-        model_name=model_name.strip(),
-        generation_config={
-            "response_mime_type": "application/json",
-            "temperature": 0.1,
-        },
+    messages = [
+        {"role": "system", "content": full_system_prompt},
+        {"role": "user", "content": document_text},
+    ]
+
+    response = client.chat.completions.create(
+        model=model_name.strip(),
+        messages=messages,
+        response_format={"type": "json_object"},
+        temperature=0.1,
     )
 
-    response = model.generate_content(user_instructions, request_options={"timeout": 60})
-    response_text = response.text.strip()
+    response_text = response.choices[0].message.content or ""
+    response_text = response_text.strip()
 
     if response_text.startswith("```"):
         response_text = re.sub(r"^```(?:json)?\s*", "", response_text)
@@ -294,7 +300,7 @@ def query_gemini_for_variables(
     try:
         parsed_json = json.loads(response_text)
     except json.JSONDecodeError as err:
-        raise ValueError(f"Не вдалося розпарсити відповідь Gemini як JSON: {err}\nОтримана відповідь:\n{response_text}")
+        raise ValueError(f"Не вдалося розпарсити відповідь LLM як JSON: {err}\nОтримана відповідь:\n{response_text}")
 
     if not isinstance(parsed_json, dict):
         raise ValueError("Очікувався JSON-об'єкт (dict) формату {'текст': 'назва_змінної'}, але отримано інший тип.")
@@ -307,13 +313,13 @@ def query_gemini_for_variables(
 # ==========================================
 def main():
     st.set_page_config(
-        page_title="Legal Document Template Generator (DOCX)",
+        page_title="Legal Document Template Generator (Local LLM)",
         page_icon="⚖️",
         layout="wide",
     )
 
     st.title("⚖️ Legal Document Template Generator")
-    st.caption("Автоматизована генерація шаблонів юридичних документів (.docx) з Human-in-the-Loop та динамічним вибором моделі Google Gemini.")
+    st.caption("Автоматизована генерація шаблонів юридичних документів (.docx) на базі корпоративного Local LLM (Ollama).")
 
     # Initialize session state
     if "config" not in st.session_state:
@@ -337,53 +343,56 @@ def main():
     tab_gen, tab_settings = st.tabs(["📄 Generation", "⚙️ Settings"])
 
     # ------------------------------------------
-    # TAB 2: SETTINGS (DYNAMIC MODEL SELECTION)
+    # TAB 2: SETTINGS (LOCAL LLM ENDPOINT & MODEL)
     # ------------------------------------------
     with tab_settings:
-        st.subheader("⚙️ Конфігурація та вибір моделі Gemini")
+        st.subheader("⚙️ Конфігурація підключення до Local LLM (Ollama)")
         st.markdown(
-            "Усі параметри зберігаються локально у файлі `config.json`. "
-            "Моделі завантажуються динамічно через `ModelService.ListModels`."
+            "Всі параметри зберігаються локально у файлі `config.json`. "
+            "Підключення здійснюється через локальний OpenAI-сумісний ендпоінт корпоративної мережі."
         )
 
         current_prompt = st.session_state.config.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
         current_variables = st.session_state.config.get("variables", DEFAULT_VARIABLES)
-        current_api_key = st.session_state.config.get("gemini_api_key", "")
-        current_selected_model = st.session_state.config.get("selected_model", "models/gemini-3.5-flash-lite")
+        current_base_url = st.session_state.config.get("base_url", DEFAULT_BASE_URL)
+        current_selected_model = st.session_state.config.get("selected_model", DEFAULT_SELECTED_MODEL)
 
-        # Dynamic model fetch
-        live_models = fetch_available_models(current_api_key) if current_api_key else []
+        # Dynamic model fetch with graceful exception handling
+        live_models = fetch_available_models(current_base_url) if current_base_url else []
 
         with st.form("settings_form"):
-            api_key_input = st.text_input(
-                "1. Gemini API Key",
-                value=current_api_key,
-                type="password",
-                help="Ваш Google Gemini API Key. Зберігається локально в config.json."
+            base_url_input = st.text_input(
+                "1. Local API Base URL (Ollama endpoint)",
+                value=current_base_url,
+                help="URL локального OpenAI-сумісного API сервера Ollama, наприклад: http://brain.primocollect.ua/v1 або http://10.0.1.17/v1"
             )
 
-            # Dynamic Model Selection Dropdown
-            model_options = list(live_models) if live_models else [current_selected_model]
-            if current_selected_model not in model_options:
-                model_options.insert(0, current_selected_model)
+            # Dynamic Model Selection Dropdown or Manual Entry if unreachable
+            if live_models:
+                model_options = list(live_models)
+                if current_selected_model not in model_options:
+                    model_options.insert(0, current_selected_model)
+                selected_model_idx = model_options.index(current_selected_model) if current_selected_model in model_options else 0
 
-            selected_model_idx = model_options.index(current_selected_model) if current_selected_model in model_options else 0
-
-            model_choice = st.selectbox(
-                "2. Робоча модель Gemini (Live Fetch)",
-                options=model_options,
-                index=selected_model_idx,
-                help="Динамічний список усіх доступних моделей з підтримкою generateContent."
-            )
-
-            if not live_models and current_api_key:
-                st.caption("ℹ️ Натисніть 'Save Settings' для оновлення списку моделей через API.")
+                model_choice = st.selectbox(
+                    "2. Робоча модель Local LLM (отримано через API)",
+                    options=model_options,
+                    index=selected_model_idx,
+                    help="Список моделей, завантажених безпосередньо з вашого сервера Ollama."
+                )
+            else:
+                st.info("ℹ️ Сервер Local LLM недоступний з поточного середовища (очікувано за межами корпоративної мережі Intranet). Введіть або залиште назву моделі вручну:")
+                model_choice = st.text_input(
+                    "2. Назва моделі Local LLM (ручне введення)",
+                    value=current_selected_model,
+                    help="Вкажіть назву моделі з Ollama, наприклад: qwen3.8:27b"
+                )
 
             prompt_input = st.text_area(
                 "3. Системний промпт (System Prompt)",
                 value=current_prompt,
                 height=130,
-                help="Інструкція для Gemini, що визначає логіку точного виділення змінних."
+                help="Інструкція для Local LLM, що визначає логіку точного виділення змінних."
             )
 
             variables_json_str = json.dumps(current_variables, ensure_ascii=False, indent=2)
@@ -405,12 +414,12 @@ def main():
                         new_config = {
                             "system_prompt": prompt_input.strip(),
                             "variables": parsed_vars,
-                            "gemini_api_key": api_key_input.strip(),
-                            "selected_model": model_choice
+                            "base_url": base_url_input.strip(),
+                            "selected_model": model_choice.strip()
                         }
                         if save_config(new_config):
                             st.session_state.config = new_config
-                            st.success(f"✅ Налаштування збережено! Обрана модель: `{model_choice}`")
+                            st.success(f"✅ Налаштування збережено! Обрана модель: `{model_choice.strip()}`")
                             st.rerun()
                 except json.JSONDecodeError as err:
                     st.error(f"❌ Помилка валідації JSON у словнику змінних: {err}")
@@ -420,12 +429,13 @@ def main():
     # ------------------------------------------
     with tab_gen:
         st.subheader("📄 Генерація шаблону DOCX")
-        
+
         var_dict = st.session_state.config.get("variables", DEFAULT_VARIABLES)
         var_options = get_variable_names(var_dict)
-        active_model = st.session_state.config.get("selected_model", "models/gemini-3.5-flash-lite")
+        active_model = st.session_state.config.get("selected_model", DEFAULT_SELECTED_MODEL)
+        active_base_url = st.session_state.config.get("base_url", DEFAULT_BASE_URL)
 
-        st.caption(f"Поточна активна модель: `{active_model}`")
+        st.caption(f"Ендпоінт: `{active_base_url}` | Модель: `{active_model}`")
 
         # Step 1: File Uploader (Accepts ONLY .docx)
         uploaded_file = st.file_uploader(
@@ -453,7 +463,7 @@ def main():
 
             col_run, col_clear = st.columns([3, 1])
             with col_run:
-                run_analysis = st.button("🤖 Аналізувати документ за допомогою Gemini", use_container_width=True, type="primary")
+                run_analysis = st.button("🤖 Аналізувати документ за допомогою Local LLM", use_container_width=True, type="primary")
             with col_clear:
                 if st.button("🔄 Очистити таблицю", use_container_width=True):
                     st.session_state.editor_data = pd.DataFrame(
@@ -462,20 +472,19 @@ def main():
                     st.session_state.generated_docx_buffer = None
                     st.rerun()
 
-            # Step 2: Call Gemini API using selected_model
+            # Step 2: Call Local LLM API
             if run_analysis:
-                api_key = st.session_state.config.get("gemini_api_key", "").strip()
                 system_prompt = st.session_state.config.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
 
-                if not api_key:
-                    st.warning("⚠️ Gemini API Key не налаштовано. Перейдіть на вкладку '⚙️ Settings' та збережіть ваш ключ.")
+                if not active_base_url:
+                    st.warning("⚠️ Local API Base URL не налаштовано. Перейдіть на вкладку '⚙️ Settings' та збережіть URL.")
                 elif not extracted_text.strip():
                     st.error("Помилка: Не вдалося отримати текст із завантаженого .docx документа.")
                 else:
-                    with st.spinner(f"Запит до `{active_model}`... Аналізуємо документ та шукаємо змінні..."):
+                    with st.spinner(f"Запит до `{active_model}` на `{active_base_url}`... Аналізуємо документ та шукаємо змінні..."):
                         try:
-                            llm_mapping = query_gemini_for_variables(
-                                api_key=api_key,
+                            llm_mapping = query_local_llm_for_variables(
+                                base_url=active_base_url,
                                 model_name=active_model,
                                 system_prompt=system_prompt,
                                 variables_dict=var_dict,
@@ -493,7 +502,7 @@ def main():
                                 })
 
                             if not rows:
-                                st.info("ℹ️ Gemini не знайшов збігів зі словником змінних у цьому документі.")
+                                st.info("ℹ️ Local LLM не знайшов збігів зі словником змінних у цьому документі.")
                                 st.session_state.editor_data = pd.DataFrame(
                                     columns=["Keep", "Original Text", "Assigned Variable"]
                                 )
@@ -502,7 +511,15 @@ def main():
                                 st.success(f"✅ Знайдено {len(rows)} потенційних змінних! Перевірте їх у таблиці нижче.")
 
                         except Exception as ex:
-                            st.error(f"❌ Помилка аналізу через Gemini API: {ex}")
+                            err_msg = str(ex)
+                            if "connection" in err_msg.lower() or "connect" in err_msg.lower():
+                                st.error(
+                                    f"❌ Помилка з'єднання з локальним сервером LLM ({active_base_url}). "
+                                    f"Перевірте, чи ви підключені до корпоративної мережі (Intranet/VPN) та чи запущено Ollama.\n\n"
+                                    f"Деталі: {err_msg}"
+                                )
+                            else:
+                                st.error(f"❌ Помилка аналізу через Local LLM API: {ex}")
 
         # Step 3: Human-in-the-Loop Review (st.data_editor)
         st.markdown("### 🧑‍⚖️ Human-in-the-Loop: Перевірка та коригування змінних")

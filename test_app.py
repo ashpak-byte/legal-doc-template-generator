@@ -10,7 +10,7 @@ from docx.enum.text import WD_COLOR_INDEX
 import app
 
 
-class TestLegalTemplateGeneratorDocx(unittest.TestCase):
+class TestLegalTemplateGeneratorOllama(unittest.TestCase):
 
     def setUp(self):
         self.config = app.load_config()
@@ -18,7 +18,7 @@ class TestLegalTemplateGeneratorDocx(unittest.TestCase):
     def test_config_structure(self):
         self.assertIn("system_prompt", self.config)
         self.assertIn("variables", self.config)
-        self.assertIn("gemini_api_key", self.config)
+        self.assertIn("base_url", self.config)
         self.assertIn("selected_model", self.config)
         self.assertIn("CRITICAL RULE", self.config["system_prompt"])
         var_names = app.get_variable_names(self.config["variables"])
@@ -41,7 +41,6 @@ class TestLegalTemplateGeneratorDocx(unittest.TestCase):
     def test_docx_replacement_and_highlight(self):
         doc = Document()
         p = doc.add_paragraph()
-        # Simulate fragmented runs in Word document
         p.add_run("Договір позики № ")
         p.add_run("4820")
         p.add_run("-2024")
@@ -83,14 +82,20 @@ class TestLegalTemplateGeneratorDocx(unittest.TestCase):
         self.assertEqual(reloaded.paragraphs[0].text, "Тестовий документ")
 
     def test_json_cleaning(self):
-        raw_response = "```json\n{\n  \"Іван\": \"pt_first_name\"\n}\n```"
+        raw_response = "```json\n{\n  \"4820-2024\": \"pt_agreement_number\"\n}\n```"
         cleaned = raw_response.strip()
         if cleaned.startswith("```"):
             import re
             cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
             cleaned = re.sub(r"\s*```$", "", cleaned)
         data = json.loads(cleaned)
-        self.assertEqual(data.get("Іван"), "pt_first_name")
+        self.assertEqual(data.get("4820-2024"), "pt_agreement_number")
+
+    def test_fetch_available_models_graceful_on_unreachable_endpoint(self):
+        # Must return empty list gracefully and not raise uncaught exception
+        models = app.fetch_available_models("http://127.0.0.1:9999/v1")
+        self.assertIsInstance(models, list)
+        self.assertEqual(len(models), 0)
 
 
 if __name__ == "__main__":
