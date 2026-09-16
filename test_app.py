@@ -20,6 +20,8 @@ class TestLegalTemplateGeneratorOllama(unittest.TestCase):
         self.assertIn("variables", self.config)
         self.assertIn("base_url", self.config)
         self.assertIn("selected_model", self.config)
+        self.assertIn("provider", self.config)
+        self.assertIn("gemini_api_key", self.config)
         self.assertIn("CRITICAL RULE", self.config["system_prompt"])
         var_names = app.get_variable_names(self.config["variables"])
         self.assertIn("pt_agreement_number", var_names)
@@ -115,11 +117,36 @@ class TestLegalTemplateGeneratorOllama(unittest.TestCase):
     def test_strict_json_directive_in_config(self):
         self.assertIn("CRITICAL: You must return ONLY raw, valid JSON", self.config["system_prompt"])
 
+    def test_parse_llm_json_response_function(self):
+        # Valid JSON
+        res1 = app.parse_llm_json_response('{"test": "pt_pin"}')
+        self.assertEqual(res1, {"test": "pt_pin"})
+
+        # Markdown wrapped
+        res2 = app.parse_llm_json_response('```json\n{"123": "pt_capital"}\n```')
+        self.assertEqual(res2, {"123": "pt_capital"})
+
+        # Empty response error
+        with self.assertRaises(ValueError):
+            app.parse_llm_json_response("")
+
+        # Malformed response error
+        with self.assertRaises(ValueError):
+            app.parse_llm_json_response("This is not JSON")
+
     def test_fetch_available_models_graceful_on_unreachable_endpoint(self):
         # Must return empty list gracefully and not raise uncaught exception
-        models = app.fetch_available_models("http://127.0.0.1:9999/v1")
-        self.assertIsInstance(models, list)
-        self.assertEqual(len(models), 0)
+        models_local = app.fetch_local_models("http://127.0.0.1:9999/v1")
+        self.assertIsInstance(models_local, list)
+        self.assertEqual(len(models_local), 0)
+
+        models_compat = app.fetch_available_models("http://127.0.0.1:9999/v1")
+        self.assertIsInstance(models_compat, list)
+        self.assertEqual(len(models_compat), 0)
+
+        # Gemini empty key
+        models_gemini = app.fetch_gemini_models("")
+        self.assertEqual(models_gemini, [])
 
 
 if __name__ == "__main__":

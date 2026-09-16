@@ -12,6 +12,8 @@
     "pt_court_fee": "Сума судового збору",
     "pt_phone": "Номер телефону"
   },
-  "base_url": "http://brain.primocollect.ua/v1",
+  "provider": "Local LLM (Ollama)",
+  "gemini_api_key": "",
+  "base_url": "http://10.0.1.17:4333/v1",
   "selected_model": "qwen3.8:27b"
 }
